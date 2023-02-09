@@ -2,6 +2,7 @@
 #include <Ethernet.h>
 #include <Wire.h>
 #include <DFRobot_DHT20.h>
+#include <SparkFunBMP384.h>
 
 // Enter a MAC address for your controller below.
 // Newer Ethernet shields have a MAC address printed on a sticker on the shield
@@ -21,6 +22,10 @@ const pin_size_t light_sensor_pin = A0;
 
 // Initialize the dht20 object with the i2c connection and address 0x38
 DFRobot_DHT20 dht20(&i2c_driver, 0x38);
+
+// Initialize the pressure sensor object
+BMP384 pressureSensor;
+uint8_t pressureSensorAddr = BMP384_I2C_ADDRESS_DEFAULT; // 0x77
 
 // Analog read resolution in bits
 const uint8_t ANALOG_RESOLUTION = 12;
@@ -46,7 +51,7 @@ void initEthernet() {
 
 void initTempHumSensor() {
     while(dht20.begin()){
-        Serial.println("Initializing DHT20 (Temp & Humidity) sensor failed");
+        Serial.println("Initializing DHT20 (Temp & Humidity) sensor failed!");
         delay(1000);
     }
 }
@@ -55,20 +60,60 @@ void initLightSensor() {
     analogReadResolution(ANALOG_RESOLUTION);
 }
 
+void initPressureSensor() {
+    while(pressureSensor.beginI2C(pressureSensorAddr, i2c_driver) != BMP3_OK) {
+        // Inform and wait for connection
+        Serial.println("Initializing BMP384 (Pressure) sensor failed!");
+        delay(1000);
+    }
+
+    int8_t err = BMP3_OK;
+
+    bmp3_odr_filter_settings osrMultipliers = 
+    {
+        .press_os = BMP3_OVERSAMPLING_32X,
+        .temp_os = BMP3_OVERSAMPLING_2X,
+        0,0
+    };
+    err = pressureSensor.setOSRMultipliers(osrMultipliers);
+    if(err)
+    {
+        Serial.print("Error! while setting Pressure OSR, error code: ");
+        Serial.println(err);
+    }
+
+    uint8_t odr=0;
+    err = pressureSensor.getODRFrequency(&odr);
+    if(err)
+    {
+        Serial.print("Error! while getting Pressure ODR! Error code: ");
+        Serial.println(err);
+    }
+
+    Serial.print("ODR Frequency: ");
+    Serial.print(200 / pow(2, odr));
+    Serial.println("Hz");
+
+}
+
 void setup() {
     Serial.begin(9600);
     while (!Serial) {
         ; // wait for serial port to connect. Needed for native USB port only
     }
 
-    initEthernet();
+    /*initEthernet();*/
     initTempHumSensor();
     initLightSensor();
+    initPressureSensor();
 }
 
 double temp = 0; // Celsius
 double humidity = 0; // % RH
 double light_intensity = 0; // % Intensity
+double pressure = 0; // Pascal
+double bmp_temp = 0; // Celsius
+bmp3_data pressure_data;
 
 void maintainEthernet() {
     switch (Ethernet.maintain()) {
@@ -167,6 +212,30 @@ void httpServer() {
         Serial.println("client disconnected");
     }
 }
+void serialMonitor() {
+    Serial.print("Temperature: ");
+    Serial.print(temp);
+    Serial.println(" C");
+
+    Serial.print("Humidity: ");
+    Serial.print(humidity);
+    Serial.println(" %RH");
+    
+    Serial.print("Light Intensity: ");
+    Serial.print(light_intensity);
+    Serial.println(" \% of max");
+
+    Serial.print("Air Pressure: ");
+    Serial.print(pressure);
+    Serial.println("Pa");
+
+    Serial.print("BMP384 Temperature: ");
+    Serial.print(bmp_temp);
+    Serial.println(" C");
+
+    Serial.println(" ---------- ");
+    delay(200);
+}
 
 void readTempHumSensor() {
     temp = dht20.getTemperature(); // Celsius
@@ -178,10 +247,26 @@ void readLightSensor() {
         analogRead(light_sensor_pin) / (1 << ANALOG_RESOLUTION); // % of max
 }
 
+void readPressureSensor() {
+    int8_t err = pressureSensor.getSensorData(&pressure_data);
+    if (err == BMP3_OK) {
+        pressure = pressure_data.pressure;         
+        bmp_temp = pressure_data.temperature;
+    } 
+    else {
+        Serial.print("Error! while retrieving pressure data, error code: ");
+        Serial.println(err);
+    }
+}
+
 void loop() {
-    maintainEthernet();
-    httpServer();
     readTempHumSensor();
     readLightSensor();
+    readPressureSensor();
+
+    serialMonitor();
+    /*maintainEthernet();*/
+    /*httpServer();*/
+
     delay(1);
 }
