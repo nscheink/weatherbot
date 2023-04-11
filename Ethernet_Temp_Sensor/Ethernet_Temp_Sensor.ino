@@ -51,6 +51,9 @@ const int raingauge_pin = 14;
 WeatherMeters <0> meters(windvane_pin, 4);
 volatile bool meters_read_data = false;
 
+// Initialize the JSON object
+DynamicJsonDocument jsonDoc(1024);
+
 void initEthernet() {
     Ethernet.init(17);  // CS pin for W5500-EVB-Pico 
 
@@ -255,79 +258,17 @@ void httpServer() {
                 // so you can send a reply
                 if (c == '\n' && currentLineIsBlank) {
                     // send a standard http response header
-                    client.println("HTTP/1.1 200 OK");
-                    client.println("Content-Type: text/html");
+                    client.println(F("HTTP/1.1 200 OK"));
+                    client.println(F("Content-Type: text/html"));
                     // the connection will be closed after completion of the
                     // response
-                    client.println("Connection: close");  
+                    client.println(F("Connection: close"));  
                     // refresh the page automatically every 5 sec
-                    client.println("Refresh: 5");  
+                    client.println(F("Refresh: 5"));  
+                    client.print(F("Content-Length: "));
+                    client.println(measureJsonPretty(jsonDoc));
                     client.println();
-                    client.println("<!DOCTYPE HTML>");
-                    client.println("<html>");
-
-                    // Output the temperature
-                    client.print("Temperature: ");
-                    client.print(temp);
-                    client.print(" C / ");
-                    client.print(convertCelsiusToFahrenheit(temp));
-                    client.println(" F");
-                    client.println("<br />");
-
-                    // Output the humidity
-                    client.print("Humidity: ");
-                    client.print(humidity);
-                    client.println(" %RH");
-                    client.println("<br />");
-
-                    // Output the light intensity
-                    client.print("Air Pressure: ");
-                    client.print(pressure);
-                    client.println(" Pa");
-                    client.println("<br />");
-
-                    // Output the light intensity
-                    client.print("Light: ");
-                    client.print(light_intensity);
-                    client.print(" % / ");
-                    client.print(light_lx);
-                    client.println(" lx");
-                    client.println("<br />");
-
-                    //Output the wind speed
-                    //client.print("Wind speed: ");
-                    //client.print(anemometerData.avg_speed);
-                    //client.print(" km/h ");
-                    //client.print(anemometerData.avg_speed / 1.609);
-                    //client.println(" mph ");
-                    //client.println("<br />");
-
-                    //Output the wind speed
-                    client.print("Wind speed: ");
-                    client.print(wind_speed);
-                    client.print(" km/h ");
-                    client.print(wind_speed / 1.609);
-                    client.println(" mph ");
-                    client.println("<br />");
-
-                    //Output the wind direction
-                    client.print("Wind direction: ");
-                    client.print(wind_dir);
-                    client.println(" deg");
-                    client.println("<br />");
-
-                    //Output the rainfall
-                    client.print("Rainfall: ");
-                    client.print(rainfall);
-                    client.println(" mm");
-                    client.println("<br />");
-
-                    //Output the cycles
-                    client.print("Debug int ");
-                    client.println(debug);
-                    client.println("<br />");
-
-                    client.println("</html>");
+                    serializeJsonPretty(jsonDoc, client);
                     break;
                 }
                 if (c == '\n') {
@@ -410,11 +351,19 @@ void readWeatherMeterKit() {
 
 void loop() {
     counter += 1;
-    if (counter >= 200){
+    if (counter >= 2000){
         readTempHumSensor();
         readLightSensor();
         readPressureSensor();
         readWeatherMeterKit();
+        jsonDoc["temp_celsius"] = temp;
+        jsonDoc["humidity_rh"] = humidity;
+        jsonDoc["light_lx"] = light_lx;
+        jsonDoc["light_intensity"] = light_intensity;
+        jsonDoc["pressure_pa"] = pressure;
+        jsonDoc["rainfall_mm"] = rainfall;
+        jsonDoc["wind_dir_deg"] = wind_dir;
+        jsonDoc["wind_speed_kmh"] = wind_speed;
         counter = 0;
     }
 
