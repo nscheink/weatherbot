@@ -1,3 +1,4 @@
+#include <ArduinoJson.h>
 #include <SPI.h>
 #include <Ethernet.h>
 #include <Wire.h>
@@ -45,9 +46,9 @@ const float TIMER_FREQ_HZ = 1.0;
 
 // Initialize weather kit
 const int windvane_pin = A1;
-const int anemometer_pin = 22;
-const int raingauge_pin = 21;
-WeatherMeters <0> meters(windvane_pin, 8);
+const int anemometer_pin = 15;
+const int raingauge_pin = 14;
+WeatherMeters <0> meters(windvane_pin, 4);
 volatile bool meters_read_data = false;
 
 void initEthernet() {

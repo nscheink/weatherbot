@@ -8,3 +8,4 @@ arduino-cli lib install "SparkFun BMP384 Arduino Library"
 arduino-cli lib install WeatherMeters
 arduino-cli lib install "Adafruit VEML7700 Library"
 arduino-cli lib install RPI_PICO_TimerInterrupt
+arduino-cli lib install ArduinoJson
