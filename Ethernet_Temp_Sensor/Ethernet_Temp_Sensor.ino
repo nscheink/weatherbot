@@ -102,7 +102,7 @@ void setup() {
         ; // wait for serial port to connect. Needed for native USB port only
     }
 
-    initEthernet();
+    /*initEthernet();*/
     initTempHumSensor();
     initLightSensor();
     initPressureSensor();
@@ -276,6 +276,18 @@ void readPressureSensor() {
     }
 }
 int counter=0;
+
+void readPressureSensor() {
+    int8_t err = pressureSensor.getSensorData(&pressure_data);
+    if (err == BMP3_OK) {
+        pressure = pressure_data.pressure;         
+        bmp_temp = pressure_data.temperature;
+    } 
+    else {
+        Serial.print("Error! while retrieving pressure data, error code: ");
+        Serial.println(err);
+    }
+}
 
 void loop() {
     counter += 1;
