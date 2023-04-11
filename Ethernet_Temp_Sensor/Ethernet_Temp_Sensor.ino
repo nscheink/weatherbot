@@ -3,6 +3,10 @@
 #include <Wire.h>
 #include <DFRobot_DHT20.h>
 #include <SparkFunBMP384.h>
+#include <Adafruit_VEML7700.h>
+#include <RPi_Pico_TimerInterrupt.h>
+#define WM_ADC_RESOLUTION 4096
+#include <WeatherMeters.h>
 
 // Enter a MAC address for your controller below.
 // Newer Ethernet shields have a MAC address printed on a sticker on the shield
@@ -30,6 +34,22 @@ uint8_t pressureSensorAddr = BMP384_I2C_ADDRESS_DEFAULT; // 0x77
 // Analog read resolution in bits
 const uint8_t ANALOG_RESOLUTION = 12;
 
+const pin_size_t ANEMOMETER_PIN = 8;
+
+// Initialize the veml7700 light sensor
+Adafruit_VEML7700 veml7700 = Adafruit_VEML7700();
+
+// Create timer for weather kit
+RPI_PICO_Timer ITimer(0);
+const float TIMER_FREQ_HZ = 1.0;
+
+// Initialize weather kit
+const int windvane_pin = A1;
+const int anemometer_pin = 22;
+const int raingauge_pin = 21;
+WeatherMeters <0> meters(windvane_pin, 8);
+volatile bool meters_read_data = false;
+
 void initEthernet() {
     Ethernet.init(17);  // CS pin for W5500-EVB-Pico 
 
@@ -48,6 +68,38 @@ void initEthernet() {
     Serial.print("My IP address: ");
     Serial.println(Ethernet.localIP());
 }
+int debug = 0;
+
+void interruptRainGauge() {
+    meters.intRaingauge();
+    debug = meters._rain_ticks;
+}
+
+void interruptAnemometer() {
+    meters.intAnemometer();
+}
+
+
+bool weatherMeterTimerHandler(struct repeating_timer *t) {
+    (void) t;
+    meters.timer();
+    return true;
+}
+
+void readDone(void) {
+    meters_read_data = true;
+}
+
+void initWeatherKit() {
+    analogReadResolution(12);
+    ITimer.attachInterrupt(TIMER_FREQ_HZ, weatherMeterTimerHandler);
+    pinMode(anemometer_pin, INPUT_PULLUP);
+    pinMode(raingauge_pin, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(anemometer_pin), interruptAnemometer, FALLING);
+    attachInterrupt(digitalPinToInterrupt(raingauge_pin), interruptRainGauge, FALLING);
+    meters.attach(readDone);
+    meters.reset();
+}
 
 void initTempHumSensor() {
     while(dht20.begin()){
@@ -57,7 +109,10 @@ void initTempHumSensor() {
 }
 
 void initLightSensor() {
-    analogReadResolution(ANALOG_RESOLUTION);
+    while(!veml7700.begin(&i2c_driver)) {
+        Serial.println("Initializing VEML7700 (Light) sensor failed!");
+        delay(1000);
+    }
 }
 
 void initPressureSensor() {
@@ -96,24 +151,58 @@ void initPressureSensor() {
 
 }
 
-void setup() {
-    Serial.begin(9600);
-    while (!Serial) {
-        ; // wait for serial port to connect. Needed for native USB port only
-    }
+typedef struct _AnemometerData {
+    int cycles;
+    int cycflag;
+    double total_time;
+    double speed;
+    double avg_speed;
+    unsigned long timeInit;
+    unsigned long timeCurrent;
+} AnemometerData;
+AnemometerData anemometerData = {0, 0, 0, 0, 0, 0, 0};
 
-    /*initEthernet();*/
+void anemometerCycle() { 
+    anemometerData.cycles++; 
+    anemometerData.timeCurrent = millis(); 
+    anemometerData.total_time = anemometerData.timeCurrent-anemometerData.timeInit; 
+    anemometerData.timeInit = anemometerData.timeCurrent; 
+    anemometerData.speed = 2400/(anemometerData.total_time); //2.4km/hr per 1 second click 
+    //average values
+    anemometerData.avg_speed = (99.*anemometerData.avg_speed + anemometerData.speed)/100.;
+}
+
+void initAnemometer() {
+    pinMode(ANEMOMETER_PIN, INPUT); 
+    attachInterrupt(digitalPinToInterrupt(ANEMOMETER_PIN), anemometerCycle, RISING); 
+
+    anemometerData.timeInit = millis(); 
+}
+
+void setup() {
+//    Serial.begin(9600);
+//    while (!Serial) {
+//        delay(100);
+//        ; // wait for serial port to connect. Needed for native USB port only
+//    }
+
+    initEthernet();
     initTempHumSensor();
     initLightSensor();
     initPressureSensor();
+    initWeatherKit();
+//    initAnemometer();
 }
 
 double temp = 0; // Celsius
 double humidity = 0; // % RH
 double light_intensity = 0; // % Intensity
-double light_lx = 0; // lx
+float light_lx = 0; // lx
 double pressure = 0; // Pascal
 double bmp_temp = 0; // Celsius
+float wind_dir = 0; // Degrees
+float wind_speed = 0; // km/h
+float rainfall = 0; // mm
 bmp3_data pressure_data;
 
 void maintainEthernet() {
@@ -204,6 +293,39 @@ void httpServer() {
                     client.println(" lx");
                     client.println("<br />");
 
+                    //Output the wind speed
+                    //client.print("Wind speed: ");
+                    //client.print(anemometerData.avg_speed);
+                    //client.print(" km/h ");
+                    //client.print(anemometerData.avg_speed / 1.609);
+                    //client.println(" mph ");
+                    //client.println("<br />");
+
+                    //Output the wind speed
+                    client.print("Wind speed: ");
+                    client.print(wind_speed);
+                    client.print(" km/h ");
+                    client.print(wind_speed / 1.609);
+                    client.println(" mph ");
+                    client.println("<br />");
+
+                    //Output the wind direction
+                    client.print("Wind direction: ");
+                    client.print(wind_dir);
+                    client.println(" deg");
+                    client.println("<br />");
+
+                    //Output the rainfall
+                    client.print("Rainfall: ");
+                    client.print(rainfall);
+                    client.println(" mm");
+                    client.println("<br />");
+
+                    //Output the cycles
+                    client.print("Debug int ");
+                    client.println(debug);
+                    client.println("<br />");
+
                     client.println("</html>");
                     break;
                 }
@@ -258,23 +380,10 @@ void readTempHumSensor() {
 }
 
 void readLightSensor() {
-    light_intensity = 100. * 
-        analogRead(light_sensor_pin) / (1 << ANALOG_RESOLUTION); // % of max
-
-    light_lx = (5 * light_intensity / 100.) * 200.;
+    light_lx = veml7700.readLux(VEML_LUX_AUTO);
+    light_intensity = (light_lx / 120000.) * 100.;
 }
 
-void readPressureSensor() {
-    int8_t err = pressureSensor.getSensorData(&pressure_data);
-    if (err == BMP3_OK) {
-        pressure = pressure_data.pressure;         
-        bmp_temp = pressure_data.temperature;
-    } 
-    else {
-        Serial.print("Error! while retrieving pressure data, error code: ");
-        Serial.println(err);
-    }
-}
 int counter=0;
 
 void readPressureSensor() {
@@ -289,18 +398,27 @@ void readPressureSensor() {
     }
 }
 
+void readWeatherMeterKit() {
+    if (meters_read_data) {
+        meters_read_data = false;
+        wind_speed = meters.getSpeed();
+        wind_dir = meters.getDir();
+        rainfall = meters.getRain();
+    }
+}
+
 void loop() {
     counter += 1;
-    if (counter >= 2000){
+    if (counter >= 200){
         readTempHumSensor();
         readLightSensor();
         readPressureSensor();
+        readWeatherMeterKit();
         counter = 0;
     }
 
     //serialMonitor();
     maintainEthernet();
     httpServer();
-
     delay(1);
 }
