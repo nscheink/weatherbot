@@ -9,33 +9,118 @@
 #define WM_ADC_RESOLUTION 4096
 #include <WeatherMeters.h>
 
-/**
- * i2c0 connected on GPIO pins 0 and 1
- * The windvane pin is connected to ADC1
- * The anemometer pin is connected to GP15
- * The raingauge pin is connected to GP14
-**/
+// Enter a MAC address for your controller below.
+// Newer Ethernet shields have a MAC address printed on a sticker on the shield
+byte mac[] = {
+    0x00, 0xDE, 0x96, 0x27, 0xD2, 0x02
+};
 
-/*******************************************************
- *               BEGIN PRESSURE SENSOR                 *
- *******************************************************/
+// Initialize the Ethernet server library with port 80
+// (port 80 is default for HTTP):
+EthernetServer server(80);
 
-/**
- * The internal object communicating with the pressure sensor hardware
- */
+// Device is connected to i2c0 on GPIO pins 0 and 1
+TwoWire i2c_driver = TwoWire(i2c0, 0, 1);
+
+// Light sensor connected to physical Pin 31, GP26, ADC0
+const pin_size_t light_sensor_pin = A0;
+
+// Initialize the dht20 object with the i2c connection and address 0x38
+DFRobot_DHT20 dht20(&i2c_driver, 0x38);
+
+// Initialize the pressure sensor object
 BMP384 pressureSensor;
-
-/**
- * The i2c address of the pressure sensor
- */
 uint8_t pressureSensorAddr = BMP384_I2C_ADDRESS_DEFAULT; // 0x77
 
-/**
- * Initialize the pressure sensor
- * @param TwoWire i2c_driver - the i2c driver that handles the sensor connection
- */
-void initPressureSensor(TwoWire *i2c_driver) {
-    while(pressureSensor.beginI2C(pressureSensorAddr, *i2c_driver) != BMP3_OK) {
+// Analog read resolution in bits
+const uint8_t ANALOG_RESOLUTION = 12;
+
+const pin_size_t ANEMOMETER_PIN = 8;
+
+// Initialize the veml7700 light sensor
+Adafruit_VEML7700 veml7700 = Adafruit_VEML7700();
+
+// Create timer for weather kit
+RPI_PICO_Timer ITimer(0);
+const float TIMER_FREQ_HZ = 1.0;
+
+// Initialize weather kit
+const int windvane_pin = A1;
+const int anemometer_pin = 15;
+const int raingauge_pin = 14;
+WeatherMeters <0> meters(windvane_pin, 4);
+volatile bool meters_read_data = false;
+
+// Initialize the JSON object
+DynamicJsonDocument jsonDoc(1024);
+
+void initEthernet() {
+    Ethernet.init(17);  // CS pin for W5500-EVB-Pico 
+
+    // start the Ethernet connection:
+    Serial.println("Initialize Ethernet with DHCP:");
+    if (Ethernet.begin(mac) == 0) {
+        Serial.println("Failed to configure Ethernet using DHCP");
+        if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+            Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
+        } else if (Ethernet.linkStatus() == LinkOFF) {
+            Serial.println("Ethernet cable is not connected.");
+        }
+    }
+    // print your local IP address:
+    server.begin();
+    Serial.print("My IP address: ");
+    Serial.println(Ethernet.localIP());
+}
+int debug = 0;
+
+void interruptRainGauge() {
+    meters.intRaingauge();
+    debug = meters._rain_ticks;
+}
+
+void interruptAnemometer() {
+    meters.intAnemometer();
+}
+
+
+bool weatherMeterTimerHandler(struct repeating_timer *t) {
+    (void) t;
+    meters.timer();
+    return true;
+}
+
+void readDone(void) {
+    meters_read_data = true;
+}
+
+void initWeatherKit() {
+    analogReadResolution(12);
+    ITimer.attachInterrupt(TIMER_FREQ_HZ, weatherMeterTimerHandler);
+    pinMode(anemometer_pin, INPUT_PULLUP);
+    pinMode(raingauge_pin, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(anemometer_pin), interruptAnemometer, FALLING);
+    attachInterrupt(digitalPinToInterrupt(raingauge_pin), interruptRainGauge, FALLING);
+    meters.attach(readDone);
+    meters.reset();
+}
+
+void initTempHumSensor() {
+    while(dht20.begin()){
+        Serial.println("Initializing DHT20 (Temp & Humidity) sensor failed!");
+        delay(1000);
+    }
+}
+
+void initLightSensor() {
+    while(!veml7700.begin(&i2c_driver)) {
+        Serial.println("Initializing VEML7700 (Light) sensor failed!");
+        delay(1000);
+    }
+}
+
+void initPressureSensor() {
+    while(pressureSensor.beginI2C(pressureSensorAddr, i2c_driver) != BMP3_OK) {
         // Inform and wait for connection
         Serial.println("Initializing BMP384 (Pressure) sensor failed!");
         delay(1000);
@@ -70,239 +155,60 @@ void initPressureSensor(TwoWire *i2c_driver) {
 
 }
 
-/**
- * Read the pressure sensor data
- * @param double* pressure - where to store the read pressure data
- * @param double* bmp_temp - where to store the read temperature data
- */
-void readPressureSensor(double *pressure, double *bmp_temp) {
-    bmp3_data pressure_data;
-    int8_t err = pressureSensor.getSensorData(&pressure_data);
-    if (err == BMP3_OK) {
-        *pressure = pressure_data.pressure;         
-        *bmp_temp = pressure_data.temperature;
-    } 
-    else {
-        Serial.print("Error! while retrieving pressure data, error code: ");
-        Serial.println(err);
-    }
+typedef struct _AnemometerData {
+    int cycles;
+    int cycflag;
+    double total_time;
+    double speed;
+    double avg_speed;
+    unsigned long timeInit;
+    unsigned long timeCurrent;
+} AnemometerData;
+AnemometerData anemometerData = {0, 0, 0, 0, 0, 0, 0};
+
+void anemometerCycle() { 
+    anemometerData.cycles++; 
+    anemometerData.timeCurrent = millis(); 
+    anemometerData.total_time = anemometerData.timeCurrent-anemometerData.timeInit; 
+    anemometerData.timeInit = anemometerData.timeCurrent; 
+    anemometerData.speed = 2400/(anemometerData.total_time); //2.4km/hr per 1 second click 
+    //average values
+    anemometerData.avg_speed = (99.*anemometerData.avg_speed + anemometerData.speed)/100.;
 }
 
-/*******************************************************
- *                 BEGIN LIGHT SENSOR                  *
- *******************************************************/
+void initAnemometer() {
+    pinMode(ANEMOMETER_PIN, INPUT); 
+    attachInterrupt(digitalPinToInterrupt(ANEMOMETER_PIN), anemometerCycle, RISING); 
 
-/**
- * The internal object communicating with the light sensor hardware
-**/
-Adafruit_VEML7700 veml7700 = Adafruit_VEML7700();
-
-/**
- * Initialize the light sensor
- * @param TwoWire i2c_driver - the i2c driver that handles the sensor connection
-**/
-void initLightSensor(TwoWire *i2c_driver) {
-    while(!veml7700.begin(i2c_driver)) {
-        Serial.println("Initializing VEML7700 (Light) sensor failed!");
-        delay(1000);
-    }
+    anemometerData.timeInit = millis(); 
 }
 
-/**
- * Read the light sensor data
- * @param float* light_lx - where to store the read light_lx data
- * @param float* light_intensity - where to store the read light_intensity data
-**/
-void readLightSensor(float *light_lx, double *light_intensity) {
-    *light_lx = veml7700.readLux(VEML_LUX_AUTO);
-    *light_intensity = (*light_lx / 140000.) * 100.;
+void setup() {
+     Serial.begin(115200);
+//    while (!Serial) {
+//        delay(100);
+//        ; // wait for serial port to connect. Needed for native USB port only
+//    }
+
+    initEthernet();
+    initTempHumSensor();
+    initLightSensor();
+    initPressureSensor();
+    initWeatherKit();
+//    initAnemometer();
 }
 
-/*******************************************************
- *               BEGIN TEMP/HUM SENSOR                 *
- *******************************************************/
+double temp = 0; // Celsius
+double humidity = 0; // % RH
+double light_intensity = 0; // % Intensity
+float light_lx = 0; // lx
+double pressure = 0; // Pascal
+double bmp_temp = 0; // Celsius
+float wind_dir = 0; // Degrees
+float wind_speed = 0; // km/h
+float rainfall = 0; // mm
+bmp3_data pressure_data;
 
-/**
- * The internal object communicating with the temperature/humidity sensor 
- * hardware
- */
-DFRobot_DHT20 dht20;
-
-/**
- * Initialize the temperature/humidity sensor
- * @param TwoWire i2c_driver - the i2c driver that handles the sensor connection
- */
-void initTempHumSensor(TwoWire *i2c_driver) {
-    dht20 = DFRobot_DHT20(i2c_driver, 0x38);
-    while(dht20.begin()){
-        Serial.println("Initializing DHT20 (Temp & Humidity) sensor failed!");
-        delay(1000);
-    }
-}
-
-/**
- * Read the temperature/humidity sensor data
- * @param double* temp - where to store the read temperature data
- * @param double* humidity - where to store the read humidity data
- */
-void readTempHumSensor(double *temp, double *humidity) {
-    *temp = dht20.getTemperature(); // Celsius
-    *humidity = dht20.getHumidity()*100; // %RH
-}
-
-/*******************************************************
- *              BEGIN WEATHERKIT SENSOR                *
- *******************************************************/
-
-/**
- * The windvane output pin is connected to analog pin A1
-**/
-const int windvane_pin = A1;
-
-/**
- * The anemometer output pin is connected to GPIO pin 15
-**/
-const int anemometer_pin = 15;
-
-/**
- * The raingauge output pin is connected to GPIO pin 14
-**/
-const int raingauge_pin = 14;
-
-/**
- * The bit resolution to use for analog reads
- *
- * 12 is the maximum the Pi Pico supports
-**/
-const int ANALOG_READ_RESOLUTION = 12; // bits
-
-/**
- * The sampling time to use for the weather station in seconds
- *
- * Rainfall and windspeed is integrated for these sampling times, and reset each
- * sample.
-**/
-const int SAMPLING_TIME = 4; // seconds
-
-/**
- * The internal object communicating with the weather station sensor hardware
- *
- * The <0> disables the built-in moving average computations
-**/
-WeatherMeters <0> meters(windvane_pin, SAMPLING_TIME);
-
-/**
- * Boolean that detects whether data is ready to be read from the library
-**/
-volatile bool meters_read_data = false;
-
-// Create timer for weather kit
-RPI_PICO_Timer ITimer(0);
-const float TIMER_FREQ_HZ = 1.0;
-
-/**
- * Called everytime an interrupt is generated by the rainfall sensor
-**/
-void interruptRainGauge() {
-    meters.intRaingauge();
-}
-
-/**
- * Called everytime an interrupt is generated by the anemometer
-**/
-void interruptAnemometer() {
-    meters.intAnemometer();
-}
-
-
-/**
- * Called periodically by the hardwire timer to run library timing code
-**/
-bool weatherMeterTimerHandler(struct repeating_timer *t) {
-    (void) t;
-    meters.timer();
-    return true;
-}
-
-/**
- * Callback used to keep track of when data is ready to be read from the library
-**/
-void readDone(void) {
-    meters_read_data = true;
-}
-
-/**
- * Initialize the weather kit
-**/
-void initWeatherKit() {
-    analogReadResolution(ANALOG_READ_RESOLUTION);
-    ITimer.attachInterrupt(TIMER_FREQ_HZ, weatherMeterTimerHandler);
-    pinMode(anemometer_pin, INPUT_PULLUP);
-    pinMode(raingauge_pin, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(anemometer_pin), interruptAnemometer, FALLING);
-    attachInterrupt(digitalPinToInterrupt(raingauge_pin), interruptRainGauge, FALLING);
-    meters.attach(readDone);
-    meters.reset();
-}
-
-/**
- * Read the weather kit data
- * @param float* wind_speed - where to store the read wind_speed data
- * @param float* wind_dir - where to store the read wind_dir data
- * @param float* rainfall - where to store the read rainfall data
-**/
-void readWeatherMeterKit(float *wind_speed, float *wind_dir, float *rainfall) {
-    if (meters_read_data) {
-        meters_read_data = false;
-        *wind_speed = meters.getSpeed();
-        *wind_dir = meters.getDir();
-        *rainfall = meters.getRain();
-    }
-}
-
-/*******************************************************
- *                 BEGIN HTTP SERVER                   *
- *******************************************************/
-
-// Enter a MAC address for your controller below.
-// Newer Ethernet shields have a MAC address printed on a sticker on the shield
-byte mac[] = {
-    0x00, 0xDE, 0x96, 0x27, 0xD2, 0x02
-};
-
-// Initialize the Ethernet server library with port 80
-// (port 80 is default for HTTP):
-EthernetServer server(80);
-
-// Initialize the JSON object
-DynamicJsonDocument jsonDoc(1024);
-
-/**
- * Initialize the Ethernet connection with a dynamic IP address
-**/
-void initEthernet() {
-    Ethernet.init(17);  // CS pin for W5500-EVB-Pico 
-
-    // start the Ethernet connection:
-    Serial.println("Initialize Ethernet with DHCP:");
-    if (Ethernet.begin(mac) == 0) {
-        Serial.println("Failed to configure Ethernet using DHCP");
-        if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-            Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
-        } else if (Ethernet.linkStatus() == LinkOFF) {
-            Serial.println("Ethernet cable is not connected.");
-        }
-    }
-    // print your local IP address:
-    server.begin();
-    Serial.print("My IP address: ");
-    Serial.println(Ethernet.localIP());
-}
-
-/**
- * Maintain the Ethernet connection, should be called fairly periodically to
- * keep the IP address assigned.
-**/
 void maintainEthernet() {
     switch (Ethernet.maintain()) {
         case 1:
@@ -336,15 +242,6 @@ void maintainEthernet() {
             break;
     }
 }
-
-/**
- * Setup and maintain the HTTP server
- *
- * Returns the JSON data on HTTP requests
- *
- * TODO: Add the correct CORS header, is probably just adding
- * `Access-Control-Allow-Origin: *` below "Content-Type: text/html"
-**/
 void httpServer() {
     // listen for incoming clients
     EthernetClient client = server.available();
@@ -390,83 +287,6 @@ void httpServer() {
         Serial.println("client disconnected");
     }
 }
-
-/**
- * Updates the internal JSON document with the new data
- */
-void updateJsonDoc(
-    double *temp,
-    double *humidity,
-    float *light_lx,
-    double *light_intensity,
-    double *pressure,
-    float *rainfall,
-    float *wind_dir,
-    float *wind_speed
-) {
-    jsonDoc["temp_celsius"] = *temp;
-    jsonDoc["humidity_rh"] = *humidity;
-    jsonDoc["light_lx"] = *light_lx;
-    jsonDoc["light_intensity"] = *light_intensity;
-    jsonDoc["pressure_pa"] = *pressure;
-    jsonDoc["rainfall_mm"] = *rainfall;
-    jsonDoc["wind_dir_deg"] = *wind_dir;
-    jsonDoc["wind_speed_kmh"] = *wind_speed;
-
-}
-
-/*******************************************************
- *                    BEGIN MAIN                       *
- *******************************************************/
-
-// Device is connected to i2c0 on GPIO pins 0 and 1
-TwoWire i2c_driver = TwoWire(i2c0, 0, 1);
-
-int debug = 0;
-
-/**
- * Raspberry Pi Pico's entry point
-**/
-void setup() {
-
-    // waitForSerial();
-
-    // Initialize the Ethernet connection, which also attempts to grab an IP
-    // address from a DHCP server
-    initEthernet();
-
-    initTempHumSensor(&i2c_driver);
-    initLightSensor(&i2c_driver);
-    initPressureSensor(&i2c_driver);
-    initWeatherKit();
-}
-
-// Variables storing the data retrieved from the sensors
-
-double temp = 0;            // Celsius
-double humidity = 0;        // % RH
-double light_intensity = 0; // % Intensity
-float light_lx = 0;         // lx
-double pressure = 0;        // Pascal
-double bmp_temp = 0;        // Celsius
-float wind_dir = 0;         // Degrees
-float wind_speed = 0;       // km/h
-float rainfall = 0;         // mm
-
-/**
- * Halts code until a USB serial device is connected. Useful for debugging.
-**/
-void waitForSerial() {
-    Serial.begin(9600);
-    while (!Serial) {
-        delay(100);
-        ; // wait for serial port to connect. Needed for native USB port only
-    }
-}
-
-/**
- * Displays sensor data on the serial monitor. Useful for debugging.
-**/
 void serialMonitor() {
     Serial.print("Temperature: ");
     Serial.print(temp);
@@ -492,60 +312,63 @@ void serialMonitor() {
     delay(200);
 }
 
-/**
- * Helper function to convert celsius to fahrenheit
- * @param double celsius - the input temperature in celsius
- * @return double fahrenheit - the output temperature in fahrenheit
-**/
 double convertCelsiusToFahrenheit(double celsius) {
     return (celsius * (9./5.)) + 32.;
 }
 
-/**
- * Variable used for timing when to collect data from the sensors. Data
- * collection needs to be delayed (for instance, every 4 seconds instead of
- * every 1 milliseconds) to prevent sensors from heating up.
-**/
+void readTempHumSensor() {
+    temp = dht20.getTemperature(); // Celsius
+    humidity = dht20.getHumidity()*100; // %RH
+}
+
+void readLightSensor() {
+    light_lx = veml7700.readLux(VEML_LUX_AUTO);
+    light_intensity = (light_lx / 120000.) * 100.;
+}
+
 int counter=0;
 
-/**
- * Pico function that continuously runs after the `setup` function is completed.
-**/
+void readPressureSensor() {
+    int8_t err = pressureSensor.getSensorData(&pressure_data);
+    if (err == BMP3_OK) {
+        pressure = pressure_data.pressure;         
+        bmp_temp = pressure_data.temperature;
+    } 
+    else {
+        Serial.print("Error! while retrieving pressure data, error code: ");
+        Serial.println(err);
+    }
+}
+
+void readWeatherMeterKit() {
+    if (meters_read_data) {
+        meters_read_data = false;
+        wind_speed = meters.getSpeed();
+        wind_dir = meters.getDir();
+        rainfall = meters.getRain();
+    }
+}
+
 void loop() {
-
-    // Increment counter to keep track of the amount of milliseconds
-    // Increment by 2 because delay of 1 in this loop, and delay of 1 in
-    // ethernet. Timing could be improved
-    counter += 2;
-
-    // Only collect data every 4 seconds (4000ms)
+    counter += 1;
     if (counter >= 4000){
-
-        // Collect data
-        readTempHumSensor(&temp, &humidity);
-        readLightSensor(&light_lx, &light_intensity);
-        readPressureSensor(&pressure, &bmp_temp);
-        readWeatherMeterKit(&wind_speed, &wind_dir, &rainfall);
-
-        // Update the JSON data
-        updateJsonDoc(
-            &temp,
-            &humidity,
-            &light_lx,
-            &light_intensity,
-            &pressure,
-            &rainfall,
-            &wind_dir,
-            &wind_speed
-        );
-        
-        // Reset the counter
+        readTempHumSensor();
+        readLightSensor();
+        readPressureSensor();
+        readWeatherMeterKit();
+        jsonDoc["temp_celsius"] = temp;
+        jsonDoc["humidity_rh"] = humidity;
+        jsonDoc["light_lx"] = light_lx;
+        jsonDoc["light_intensity"] = light_intensity;
+        jsonDoc["pressure_pa"] = pressure;
+        jsonDoc["rainfall_mm"] = rainfall;
+        jsonDoc["wind_dir_deg"] = wind_dir;
+        jsonDoc["wind_speed_kmh"] = wind_speed;
         counter = 0;
     }
 
-    // Maintain the HTTP server
+    //serialMonitor();
     maintainEthernet();
     httpServer();
-
     delay(1);
 }
