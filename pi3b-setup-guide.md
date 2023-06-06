@@ -52,6 +52,52 @@ ssh {USERNAME}@{PI_IP_ADDRESS}
 and insert the password you configured earlier when prompted. It should pull up
 a message from Debian, and launch a bash shell. 
 
+#### Copy the Code to the Pi
+
+First, download the code to your local computer.
+
+Open a new terminal and clone the git repository
+
+```bash
+cd PARENT_DIRECTORY
+git clone https://github.com/XXXX/weatherbot
+```
+
+Copy the code directory over to the Raspberry Pi
+
+```bash
+scp -r weatherbot {USERNAME}@{PI_IP_ADDRESS}:~/
+```
+
+#### (Optional) Configure what you want
+
+The next step will remove the Pi's ability to access the internet, so you should
+download and configure what you want now while you still have access to the
+internet.
+
+#### Run the auto-setup script
+
+SSH into the pi and run the included setup script
+
+```bash
+ssh {USERNAME}@{PI_IP_ADDRESS}
+cd ~/weatherbot
+./setup.sh
+```
+
+This should update the system, install the necessary packages, and configure the
+system as an access point ready for development and integration with the
+weatherbot pico.
+
+After several minutes, the system should reboot on its own, and a new wifi
+network with the SSID "Weatherbot" should be found. If this is the case, the
+setup script worked, and you're done!
+
+If you'd rather do the process manually, the process is detailed below. You can
+also read the bash scripts. Otherwise, the setup is completed.
+
+### Manual process
+
 #### Update the System
 
 In the bash session, enter
