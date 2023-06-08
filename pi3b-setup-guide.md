@@ -11,32 +11,32 @@
 
 ### Install Raspberry Pi OS
 
-Download the Raspberry Pi Imager from
+1. Download the Raspberry Pi Imager from
 [here](https://www.raspberrypi.com/software/). Plugin in your SD card, and then
 start the imager software.
 
-Select "Choose OS" -> "Raspberry Pi OS (other)" -> "Raspberry Pi OS Lite (64
+2. Select "Choose OS" -> "Raspberry Pi OS (other)" -> "Raspberry Pi OS Lite (64
 bit)".
 
-Select "Choose Storage" -> Your SD card. 
+3. Select "Choose Storage" -> Your SD card. 
 
-Select the Gear button on the bottom right corner to bring up the settings. 
+4. Select the Gear button on the bottom right corner to bring up the settings. 
 
-Enable the checkbox for "Set hostname" and change the hostname to
+5. Enable the checkbox for "Set hostname" and change the hostname to
 "weatherbot.local".
 
-Enable the checkbox for "Enable SSH", make sure "Use password authentication" is
+6. Enable the checkbox for "Enable SSH", make sure "Use password authentication" is
 selected.
 
-Enable the checkbox for "Set username and password". Keep the username as
+7. Enable the checkbox for "Set username and password". Keep the username as
 "user", and enter a password. 
 
-Enable the checkbox for "Configure wireless LAN" and enter the SSID and password
+8. Enable the checkbox for "Configure wireless LAN" and enter the SSID and password
 for your WiFi network. Optionally, set your Locale settings.
 
-Select "Save", then select "Write". 
+9. Select "Save", then select "Write". 
 
-It will take a couple minutes to write the OS to the SD card. Once it's
+10. It will take a couple minutes to write the OS to the SD card. Once it's
 complete, a window will pop up saying "Write Successful" and that the SD card
 can be removed. Select continue, and eject the SD card.
 
