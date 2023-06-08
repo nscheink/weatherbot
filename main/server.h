@@ -8,6 +8,7 @@
 static byte mac[] = {
     0x00, 0xDE, 0x96, 0x27, 0xD2, 0x02
 };
+
 // Initialize the Ethernet server library with port 80
 // (port 80 is default for HTTP):
 static EthernetServer server(80);
@@ -15,7 +16,9 @@ static EthernetServer server(80);
 // Initialize the JSON object
 static DynamicJsonDocument jsonDoc(1024);
 
-
+/**
+ * Initialize the Ethernet connection with a dynamic IP address
+**/
 void initEthernet() {
     Ethernet.init(17);  // CS pin for W5500-EVB-Pico 
 
@@ -34,6 +37,11 @@ void initEthernet() {
     Serial.print("My IP address: ");
     Serial.println(Ethernet.localIP());
 }
+
+/**
+ * Maintain the Ethernet connection, should be called fairly periodically to
+ * keep the IP address assigned.
+**/
 void maintainEthernet() {
     switch (Ethernet.maintain()) {
         case 1:
@@ -68,6 +76,14 @@ void maintainEthernet() {
     }
 }
 
+/**
+ * Setup and maintain the HTTP server
+ *
+ * Returns the JSON data on HTTP requests
+ *
+ * TODO: Add the correct CORS header, is probably just adding
+ * `Access-Control-Allow-Origin: *` below "Content-Type: text/html"
+**/
 void httpServer() {
     // listen for incoming clients
     EthernetClient client = server.available();
@@ -113,6 +129,10 @@ void httpServer() {
         Serial.println("client disconnected");
     }
 }
+
+/**
+ * Updates the internal JSON document with the new data
+ */
 void updateJsonDoc(
     double *temp,
     double *humidity,

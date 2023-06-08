@@ -5,11 +5,42 @@
 #define WM_ADC_RESOLUTION 4096
 #include <WeatherMeters.h>
 
+/**
+ * The windvane output pin is connected to analog pin A1
+**/
 const int windvane_pin = A1;
+
+/**
+ * The anemometer output pin is connected to GPIO pin 15
+**/
 const int anemometer_pin = 15;
+
+/**
+ * The raingauge output pin is connected to GPIO pin 14
+**/
 const int raingauge_pin = 14;
-const int ANALOG_READ_RESOLUTION = 12;
-WeatherMeters <0> meters(windvane_pin, 4);
+
+/**
+ * The bit resolution to use for analog reads
+ *
+ * 12 is the maximum the Pi Pico supports
+**/
+const int ANALOG_READ_RESOLUTION = 12; // bits
+
+/**
+ * The sampling time to use for the weather station in seconds
+ *
+ * Rainfall and windspeed is integrated for these sampling times, and reset each
+ * sample.
+**/
+const int SAMPLING_TIME = 4; // seconds
+
+/**
+ * The internal object communicating with the weather station sensor hardware
+ *
+ * The <0> disables the built-in moving average computations
+**/
+WeatherMeters <0> meters(windvane_pin, SAMPLING_TIME);
 volatile bool meters_read_data = false;
 
 // Create timer for weather kit
